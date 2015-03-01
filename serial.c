@@ -147,21 +147,10 @@ static void write_port(fd){
 	int cmd_len; 
 	GET_ARRAY_LEN(cmd_pool[cmd_num], cmd_len);
 	int i;
-	if (!formming_cmd){
-		for (i=0; i<cmd_len; i++){
-            printf("%d ",cmd_len);
-			n_written += write(fd, &(cmd_pool[cmd_num][i]), 1);
-			
-		}
-	}else{
-		for (i=0; i<len; i++){
-			printf("%d ",len);
-			n_written += write(fd, &(cmd_pool[3][i]), 1);
-			//n_written += write(fd, &(cmd_pool[cmd_num][i]), 1);
-		}
-
+	for (i=0; i<len; i++){
+		printf("%d ",len);
+		n_written += write(fd, &(cmd[i]), 1);
 	}
-	//n_written = write(fd, &(cmd_pool[cmd_num]), cmd_len);
 	printf("bytes written :%d\n",(int)n_written);
 	
 	if ((int)n_written > 0)
@@ -174,27 +163,22 @@ static void write_port(fd){
 /* read response from the port */
 static void read_port(fd){
     
-	printf("zenmebujinlai");
 	unsigned char response[1024];
 	int n_read=0;
 	
     int i=0;
 	int getend = 0;
     
-	printf("haha");
 	while (!getend){
-		printf("ssss\n");
 		n_read += read(fd, &response[i], 1);
-		printf("%x ",response[i]);
-		if (response[i] == 0x02 && response[i-1] == 0xdd)   // reach the end of the response
+		if (response[i] == 0x02 && response[i-1] == 0xdd) // reach the end of the response
 			getend = 1;
 		i++;
 	}
-	printf("haha2");
 
 	if (n_read > 0){
 		printf("bytes read: %d\n", (int)n_read);
-		printf("read successfully\n");
+		printf("response read successfully as following:\n");
 		int i;
 		for (i = 0; i<n_read; i++){
 			printf("%d  ", (int)response[i]);
@@ -203,11 +187,10 @@ static void read_port(fd){
 	else{
 		printf("read failed\n");
 	}
-	
-
 }
 
-unsigned char checksum(unsigned char *buffer, int len) 
+/* calculating the checksum */
+static unsigned char checksum(unsigned char *buffer, int len) 
 {
     unsigned char xor = 0;
 
@@ -217,9 +200,10 @@ unsigned char checksum(unsigned char *buffer, int len)
     return xor;
 }
 
+/* forming the serial communication frame */
 static unsigned char *serial_encode(unsigned char *data, int datalen){
 
-	/*
+	
     int buflen = 0;
     int i;
 
@@ -238,27 +222,8 @@ static unsigned char *serial_encode(unsigned char *data, int datalen){
     buffer[buflen++] = RX_ESCEND;
 
 	len = buflen;
-    */
-	int buflen = 0;
-    int i;
-
-    // copy message data into internal buffer, with framing and escaped chars
-
-    cmd_pool[3][buflen++] = RX_ESCCHAR;
-    cmd_pool[3][buflen++] = RX_ESCSTART;
-    for(i = 0; i < datalen; i++) {
-        if(data[i] == RX_ESCCHAR) {
-            cmd_pool[3][buflen++] = RX_ESCCHAR;
-            cmd_pool[3][buflen++] = RX_ESCAPED;
-        } else
-            cmd_pool[3][buflen++] = data[i];
-    }
-    cmd_pool[3][buflen++] = RX_ESCCHAR;
-    cmd_pool[3][buflen++] = RX_ESCEND;
-
-	len = buflen;
-
-	//return buffer;
+    
+	return buffer;
 }
 
 static unsigned char *translate_cmd(int cmd, int obj, int inst, int parm, int *data, int datalen){
@@ -283,7 +248,7 @@ static unsigned char *translate_cmd(int cmd, int obj, int inst, int parm, int *d
     
  	final_buffer = serial_encode(sendbuffer, len);
 
-	//return final_buffer;
+	return final_buffer;
 }
 
 
@@ -303,7 +268,8 @@ void main(int argc, char *argv[])
 	
 
     if(!strcmp(argv[1],"modinfo")){
-		cmd_num = 0;
+	    //	cmd_num = 0;
+		cmd = translate_cmd(CMD_READ, OBJ_ModuleInfo,1, 0, 0, 0);
 	}
 	else if (!strcmp(argv[1], "temp")){
 		cmd_num = 1;
@@ -313,30 +279,12 @@ void main(int argc, char *argv[])
 		int switch_num, channel_num, port_num;
 
 		switch_num = argv[1][8]-'0';
-
 		channel_num = (argv[1][10]-'0')*10 + (argv[1][11]-'0');
-
 		port_num = argv[1][13]-'0';
 		
 		short val = swapBE16(port_num);
 
-		//cmd = translate_cmd(CMD_WRITE, OBJ_ChanPort, channel_num, 1, &val, sizeof(short));
-        translate_cmd(CMD_WRITE, OBJ_ChanPort, channel_num, 1, &val, sizeof(short));
-
-		//cmd = translate_cmd(CMD_READ, OBJ_ModuleInfo,1, 0, 0, 0);
-		/*
-      	printf("cmdlen: %d\n", len);
-		int i;
-		for (i=0; i<len; i++){
-			printf("%d ",cmd[i]);
-		}
-		printf("\n");
-        for (i=0;i<13;i++){
-			printf("%d ", cmd_pool[2][i]);
-		}
-		*/
-
-		formming_cmd = 1;
+		cmd = translate_cmd(CMD_WRITE, OBJ_ChanPort, channel_num, 1, &val, sizeof(short));
 
 	}
 	else if (!strcmp(argv[1], "switch")){
@@ -345,8 +293,6 @@ void main(int argc, char *argv[])
 
 	// write command to the serial port
 	write_port(fd);
-	 printf("kule");
-
 	printf("write finished\n");
    	// read response from the serial port
 	read_port(fd);
