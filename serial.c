@@ -5,8 +5,8 @@
 #include <errno.h>   /* Error number definitions */
 #include <termios.h> /* POSIX terminal control definitions */
 #include <stdlib.h>
-#include <stdint.h>
-#define GET_ARRAY_LEN(array,len){len = (sizeof(array) / sizeof(array[0]));}
+//#include <stdint.h>
+//#define GET_ARRAY_LEN(array,len){len = (sizeof(array) / sizeof(array[0]));}
 
 #define MESSAGE_MAX_LEN         256
 
@@ -45,26 +45,21 @@ short swapBE16(short src)
     dstp[0] = srcp[1]; // LSB
     return dst;
 }
-
+/*
  unsigned char cmd_pool[4][13] = {{0xdd, 0x01, 0x01, 0x05, 0x02, 0x06, 0x01, 0x00, 0x01, 0xdd, 0x02},   // modinfo
 	                   			       {0xdd, 0x01, 0x01, 0x05, 0x02, 0x96, 0x03, 0x00, 0x93, 0xdd, 0x02},  // readtemp
                                        {0xdd, 0x01, 0x02, 0x07, 0x01, 0xaa, 0x0c, 0x01, 0x00, 0x02, 0xa1, 0xdd, 0x02},
                                        {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}};
-/*									  
+*//*									  
 const int cmd_pool[2][11] = {{221, 1, 1, 5, 2, 6, 1, 0, 1, 221, 2},   // modinfo
 	                   		 {221, 1, 1, 5, 2, 150, 3, 0, 147, 221, 2}};  // readtemp
 */
 
 int cmd_num = 2;
-
 int len;
-
 int last_mid;
-
 int formming_cmd = 0;
-
 unsigned char *cmd;
-
 unsigned char buffer[MESSAGE_MAX_LEN*2 + 4];
 
 int randomStartId(void)
@@ -144,20 +139,22 @@ static void close_port(fd){
 static void write_port(fd){
 	
 	int n_written = 0;
-	int cmd_len; 
-	GET_ARRAY_LEN(cmd_pool[cmd_num], cmd_len);
+//	int cmd_len; 
+//	GET_ARRAY_LEN(cmd_pool[cmd_num], cmd_len);
 	int i;
+
+	printf("Writing command...\n");
+
 	for (i=0; i<len; i++){
-		printf("%d ",len);
 		n_written += write(fd, &(cmd[i]), 1);
 	}
-	printf("bytes written :%d\n",(int)n_written);
-	
-	if ((int)n_written > 0)
-		printf("Serial port writing succeeded\n");
-	else
-		printf("Serial port writing failed\n");
-
+		
+	if ((int)n_written > 0){
+		printf("[Serial Port Write Successfully] ");
+		printf("Total bytes written :%d\n",(int)n_written);
+	}else{
+		printf("[Serial Port Writing Failed]\n");
+	}
 }
 
 /* read response from the port */
@@ -169,6 +166,8 @@ static void read_port(fd){
     int i=0;
 	int getend = 0;
     
+	printf("Reading response...\n");
+
 	while (!getend){
 		n_read += read(fd, &response[i], 1);
 		if (response[i] == 0x02 && response[i-1] == 0xdd) // reach the end of the response
@@ -177,15 +176,17 @@ static void read_port(fd){
 	}
 
 	if (n_read > 0){
-		printf("bytes read: %d\n", (int)n_read);
-		printf("response read successfully as following:\n");
+		printf("[Serial Port Read Successfully] ");
+		printf("Total bytes read: %d\n", (int)n_read);
+		printf("response message:\n");
 		int i;
 		for (i = 0; i<n_read; i++){
-			printf("%d  ", (int)response[i]);
+			printf("%x  ", response[i]);
 		}
+		printf("\n");
 	}
 	else{
-		printf("read failed\n");
+		printf("[Serial Port Reading Failed]\n");
 	}
 }
 
@@ -226,7 +227,8 @@ static unsigned char *serial_encode(unsigned char *data, int datalen){
 	return buffer;
 }
 
-static unsigned char *translate_cmd(int cmd, int obj, int inst, int parm, int *data, int datalen){
+/* translate user command to serial command */
+static unsigned char *translate_cmd(int cmd, int obj, int inst, int parm, short *data, int datalen){
 
 	unsigned char sendbuffer[MESSAGE_MAX_LEN];
 	unsigned char *final_buffer;
@@ -236,7 +238,7 @@ static unsigned char *translate_cmd(int cmd, int obj, int inst, int parm, int *d
 	last_mid = (last_mid + 1) % 256;
     if(last_mid == 0) last_mid = 1;
 
-	sendbuffer[0] = 2;
+	sendbuffer[0] = last_mid;
 	sendbuffer[1] = datalen + 5;
 	sendbuffer[2] = cmd;
 	sendbuffer[3] = obj;
@@ -293,10 +295,8 @@ void main(int argc, char *argv[])
 
 	// write command to the serial port
 	write_port(fd);
-	printf("write finished\n");
    	// read response from the serial port
 	read_port(fd);
-	printf("read finished\n");
 
 	// close the serial port
 	close(fd);
