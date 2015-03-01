@@ -268,13 +268,8 @@ void main(int argc, char *argv[])
     // set speed to 115,200 bps, 8n1 (no parity)
 	set_interface_attribs (fd, B115200, 0);     
 	
-
     if(!strcmp(argv[1],"modinfo")){
-	    //	cmd_num = 0;
 		cmd = translate_cmd(CMD_READ, OBJ_ModuleInfo,1, 0, 0, 0);
-	}
-	else if (!strcmp(argv[1], "temp")){
-		cmd_num = 1;
 	}
 	else if(!strncmp(argv[1],"channel",7)) {
 
@@ -289,8 +284,17 @@ void main(int argc, char *argv[])
 		cmd = translate_cmd(CMD_WRITE, OBJ_ChanPort, channel_num, 1, &val, sizeof(short));
 
 	}
-	else if (!strcmp(argv[1], "switch")){
-		cmd_num = 2;
+	else if(!strncmp(argv[1],"attenua",7)) {
+
+		int switch_num, channel_num, att_num;
+
+		switch_num = argv[1][8]-'0';
+		channel_num = (argv[1][10]-'0')*10 + (argv[1][11]-'0');
+		att_num = (argv[1][13]-'0')*10 + (argv[1][14]-'0');
+
+		short val = swapBE16(att_num);
+		
+		cmd = translate_cmd(CMD_WRITE, OBJ_ChanAtten, channel_num, 1, &val, sizeof(short));
 	}
 
 	// write command to the serial port
