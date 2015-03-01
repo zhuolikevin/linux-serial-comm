@@ -1,3 +1,12 @@
+/*
+ *  Program name: serial
+ *  Platform: GNU/Linux
+ *  Author: Zhuo Li
+ *  Late Modification: March, 1st, 2015
+ *  Brief Description: This program can realize the communication with NISTICA WSS board 
+ *                     via serial port under Linux environment. 
+ *  Copyright: Lightwave Research Laboratory @ Columbia Unviersity
+ */
 #include <stdio.h>   /* Standard input/output definitions */
 #include <string.h>  /* String function definitions */
 #include <unistd.h>  /* UNIX standard function definitions */
@@ -5,17 +14,20 @@
 #include <errno.h>   /* Error number definitions */
 #include <termios.h> /* POSIX terminal control definitions */
 #include <stdlib.h>
-//#include <stdint.h>
-//#define GET_ARRAY_LEN(array,len){len = (sizeof(array) / sizeof(array[0]));}
 
 #define MESSAGE_MAX_LEN         256
-
 #define OBJ_ModuleInfo              6  // Get Module Info
 #define OBJ_ChanPort              170  // Channel Switch Port
 #define OBJ_ChanAtten             171  // Channel Attenuation
 
-char mod_info[MESSAGE_MAX_LEN];
+/* Global Variables */
+char mod_info[MESSAGE_MAX_LEN];             // Store module information response
+int len;                                    // Store sending serial frame length
+int last_mid;                               // Store MID
+unsigned char *cmd;                         // Store serial frame
+unsigned char buffer[MESSAGE_MAX_LEN*2 + 4];// Buffer for formming the serial frame
 
+/* Command Table */
 typedef enum {
     CMD_NOOP      = 0,
     CMD_WRITE     = 1,
@@ -26,16 +38,23 @@ typedef enum {
     CMD_COMMIT    = 6,
     CMD_START     = 7,
     CMD_GETRESULT = 8,
+	CMD_TABLEADD  = 32,        // for switch choosing
 } Command;
 
+/* RS-232 serial communication framing key words */
 typedef enum {
-    RX_ESCCHAR  = 0xdd,         /* only recognized on rs232 */
+    RX_ESCCHAR  = 0xdd,         
     RX_ESCSTART = 0x01,
     RX_ESCEND   = 0x02,
     RX_REREAD   = 0x03,
     RX_ESCAPED  = 0x04,
 } SerialRX;
 
+/* 
+ * converting to big-endian
+ * module uses big-endian (most-significant byte first) for communications, so
+ * we need to swap if host is little-endian like a PC.
+ */
 short swapBE16(short src)
 {
     short dst;
@@ -45,23 +64,8 @@ short swapBE16(short src)
     dstp[0] = srcp[1]; // LSB
     return dst;
 }
-/*
- unsigned char cmd_pool[4][13] = {{0xdd, 0x01, 0x01, 0x05, 0x02, 0x06, 0x01, 0x00, 0x01, 0xdd, 0x02},   // modinfo
-	                   			       {0xdd, 0x01, 0x01, 0x05, 0x02, 0x96, 0x03, 0x00, 0x93, 0xdd, 0x02},  // readtemp
-                                       {0xdd, 0x01, 0x02, 0x07, 0x01, 0xaa, 0x0c, 0x01, 0x00, 0x02, 0xa1, 0xdd, 0x02},
-                                       {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}};
-*//*									  
-const int cmd_pool[2][11] = {{221, 1, 1, 5, 2, 6, 1, 0, 1, 221, 2},   // modinfo
-	                   		 {221, 1, 1, 5, 2, 150, 3, 0, 147, 221, 2}};  // readtemp
-*/
 
-int cmd_num = 2;
-int len;
-int last_mid;
-int formming_cmd = 0;
-unsigned char *cmd;
-unsigned char buffer[MESSAGE_MAX_LEN*2 + 4];
-
+/* Generating random MID */
 int randomStartId(void)
 {
 	time_t t = time(NULL);
@@ -121,7 +125,6 @@ static int open_port(char *dev)
     	perror("open_port: Unable to open this device");
   	}
   	else{
-    	//printf("serial port opened successfully as fd :%d\n", fd);
     	fcntl(fd, F_SETFL, 0);
   	}
 
@@ -139,8 +142,6 @@ static void close_port(fd){
 static void write_port(fd){
 	
 	int n_written = 0;
-//	int cmd_len; 
-//	GET_ARRAY_LEN(cmd_pool[cmd_num], cmd_len);
 	int i;
 
 	printf("Writing command...\n");
@@ -170,7 +171,8 @@ static void read_port(fd){
 
 	while (!getend){
 		n_read += read(fd, &response[i], 1);
-		if (response[i] == 0x02 && response[i-1] == 0xdd) // reach the end of the response
+		// if reach the end of the response
+		if (response[i] == 0x02 && response[i-1] == 0xdd) 
 			getend = 1;
 		i++;
 	}
@@ -228,7 +230,7 @@ static unsigned char *serial_encode(unsigned char *data, int datalen){
 }
 
 /* translate user command to serial command */
-static unsigned char *translate_cmd(int cmd, int obj, int inst, int parm, short *data, int datalen){
+static unsigned char *translate_cmd(int cmd, int obj, int inst, int parm, short *data, int datalen, unsigned char table){
 
 	unsigned char sendbuffer[MESSAGE_MAX_LEN];
 	unsigned char *final_buffer;
@@ -236,72 +238,130 @@ static unsigned char *translate_cmd(int cmd, int obj, int inst, int parm, short 
     unsigned char mid;
 	
 	last_mid = (last_mid + 1) % 256;
-    if(last_mid == 0) last_mid = 1;
-
-	sendbuffer[0] = last_mid;
-	sendbuffer[1] = datalen + 5;
-	sendbuffer[2] = cmd;
-	sendbuffer[3] = obj;
-	sendbuffer[4] = inst;
-	sendbuffer[5] = parm;
-	memcpy(&sendbuffer[6], data, datalen);
-	sendbuffer[6+datalen] = checksum(sendbuffer, 6+datalen);
-	len = 7 + datalen;
+    if (last_mid == 0) last_mid = 1;
+    
+	if (table == 0xff){                     // WSS not selected, default to be WSS A
+		sendbuffer[0] = last_mid;
+		sendbuffer[1] = datalen + 5;
+		sendbuffer[2] = cmd;
+		sendbuffer[3] = obj;
+		sendbuffer[4] = inst;
+		sendbuffer[5] = parm;
+		memcpy(&sendbuffer[6], data, datalen);
+		sendbuffer[6+datalen] = checksum(sendbuffer, 6+datalen);
+		len = 7 + datalen;
+	}else{                                  // WSS selected
+		sendbuffer[0] = last_mid;
+		sendbuffer[1] = datalen + 6;
+		sendbuffer[2] = cmd;
+		sendbuffer[3] = obj;
+		sendbuffer[4] = table;
+		sendbuffer[5] = inst;
+		sendbuffer[6] = parm;
+		memcpy(&sendbuffer[7], data, datalen);
+		sendbuffer[7+datalen] = checksum(sendbuffer, 7+datalen);
+		len = 8 + datalen;
+	}
     
  	final_buffer = serial_encode(sendbuffer, len);
 
 	return final_buffer;
 }
 
-
-		
-
+/* program beginning */
 void main(int argc, char *argv[])
 {
-	int fd;
-		
-	char *dev = "/dev/ttyUSB0";
-    
-	// open the serial port
-	fd = open_port(dev);
-
-    // set speed to 115,200 bps, 8n1 (no parity)
-	set_interface_attribs (fd, B115200, 0);     
-	
+	/* determine the command */
     if(!strcmp(argv[1],"modinfo")){
-		cmd = translate_cmd(CMD_READ, OBJ_ModuleInfo,1, 0, 0, 0);
+        
+		// get module information
+		cmd = translate_cmd(CMD_READ, OBJ_ModuleInfo,1, 0, 0, 0, 0xff);
+	
 	}
 	else if(!strncmp(argv[1],"channel",7)) {
-
+        // change channel ports
+		// [example] channel.1.06.2
+		// switch the 06 channel in WSS B to port 2
+		// detail can be found in Readme.txt
 		int switch_num, channel_num, port_num;
 
 		switch_num = argv[1][8]-'0';
 		channel_num = (argv[1][10]-'0')*10 + (argv[1][11]-'0');
 		port_num = argv[1][13]-'0';
 		
+		if (port_num > 2){
+			printf("<Port ID> should be in the range of 0 ~ 2\n");
+			exit(0);
+		}
+
+        short table;
+		int command;
+
+		if (switch_num == 0){
+			table = 0xff;
+			command = CMD_WRITE;
+		}else if (switch_num == 1){
+			table = 0x01;
+			command = CMD_WRITE + CMD_TABLEADD;
+		}else{
+			printf("<WSS ID> should only be 0 or 1\n");
+			exit(0);
+		}
 		short val = swapBE16(port_num);
-
-		cmd = translate_cmd(CMD_WRITE, OBJ_ChanPort, channel_num, 1, &val, sizeof(short));
-
+   
+		cmd = translate_cmd(command, OBJ_ChanPort, channel_num, 1, &val, sizeof(short), table);
 	}
 	else if(!strncmp(argv[1],"attenua",7)) {
-
+        // channel attenuation
+		// [example] attenua.1.06.20
+		// attenuate the 06 channel in WSS B by 2dB
+		// detail can be found in Readme.txt
 		int switch_num, channel_num, att_num;
 
 		switch_num = argv[1][8]-'0';
 		channel_num = (argv[1][10]-'0')*10 + (argv[1][11]-'0');
 		att_num = (argv[1][13]-'0')*10 + (argv[1][14]-'0');
 
+		short table;
+		int command;
+
+		if (switch_num == 0){
+			table = 0xff;
+			command = CMD_WRITE;
+		}else if (switch_num == 1){
+			table = 0x01;
+			command = CMD_WRITE + CMD_TABLEADD;
+		}else{
+			printf("<WSS ID> should only be 0 or 1\n");
+			exit(0);
+		}
+
 		short val = swapBE16(att_num);
-		
-		cmd = translate_cmd(CMD_WRITE, OBJ_ChanAtten, channel_num, 1, &val, sizeof(short));
+
+		cmd = translate_cmd(command, OBJ_ChanAtten, channel_num, 1, &val, sizeof(short), table);
+	}
+	else{
+
+		printf("Running format:\n \
+    >> serial <command> [option]\n \
+	current support <command>:\n \
+	1. modinfo\n \
+	2. channel.<WSS ID>.<channel ID>.<Port ID>\n \
+	3. attenua.<WSS ID>.<channel ID>.<Attenuation>\n");
+		exit(0);
 	}
 
-	// write command to the serial port
+	int fd;		
+	char *dev = "/dev/ttyUSB1";    
+	/* open the serial port */
+	fd = open_port(dev);
+    /* set speed to 115,200 bps, 8n1 (no parity) */
+	set_interface_attribs (fd, B115200, 0); // Baud Rate must be 115200 for NISTICA
+	/* write command to the serial port */
 	write_port(fd);
-   	// read response from the serial port
+   	/* read response from the serial port */
 	read_port(fd);
-
-	// close the serial port
+	/* close the serial port */
 	close(fd);
+
 }
