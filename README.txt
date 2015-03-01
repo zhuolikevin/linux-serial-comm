@@ -8,8 +8,11 @@
 #  Copyright: Lightwave Research Laboratory @ Columbia Unviersity
 #
 
-A. Input format
-    ./serial <command> [option]
+A. Running instruction
+    Input in the terminal where you store the c code and Makefile:
+	>> make
+    and then:
+    >> ./serial <command> [option]
 
 	current support <command>:
 	1. modinfo                                        get module information
